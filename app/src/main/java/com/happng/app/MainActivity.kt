@@ -19,7 +19,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Base64
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,12 +52,21 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun HappNgApp(initialProfiles: List<String>, persist: (List<String>) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
     var profiles by remember { mutableStateOf(initialProfiles) }
     var selected by remember { mutableIntStateOf(if (initialProfiles.isEmpty()) -1 else 0) }
-    var message by remember { mutableStateOf("لینک VLESS را اضافه و انتخاب کن.") }
+    var message by remember { mutableStateOf("لینک سرور یا Subscription را وارد کن.") }
     var pendingConfig by remember { mutableStateOf<String?>(null) }
-    var connected by remember { mutableStateOf(XrayRuntime.isRunning()) }
+    var connected by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            connected = context.getSharedPreferences("happng", 0).getBoolean("connected", false)
+            kotlinx.coroutines.delay(700)
+        }
+    }
 
     fun startVpn(config: String) {
         val intent = Intent(context, HappVpnService::class.java)
@@ -60,7 +75,7 @@ private fun HappNgApp(initialProfiles: List<String>, persist: (List<String>) -> 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
             else context.startService(intent)
-            message = "درخواست اتصال ارسال شد؛ وضعیت نهایی در اعلان VPN مشخص می‌شود."
+            message = "درخواست اتصال ارسال شد؛ در حال بررسی وضعیت تونل…"
         } catch (e: Exception) {
             message = "شروع سرویس VPN ناموفق بود: ${e.message}"
         }
@@ -71,130 +86,140 @@ private fun HappNgApp(initialProfiles: List<String>, persist: (List<String>) -> 
     ) { result ->
         val config = pendingConfig
         pendingConfig = null
-        if (result.resultCode == android.app.Activity.RESULT_OK && config != null) {
-            startVpn(config)
-        } else {
-            message = "مجوز VPN داده نشد؛ اتصال شروع نشد."
-        }
+        if (result.resultCode == android.app.Activity.RESULT_OK && config != null) startVpn(config)
+        else message = "مجوز VPN داده نشد؛ اتصال شروع نشد."
     }
 
     fun updateProfiles(next: List<String>) {
-        profiles = next
-        persist(next)
+        profiles = next.distinct()
+        persist(profiles)
         selected = when {
-            next.isEmpty() -> -1
-            selected !in next.indices -> 0
+            profiles.isEmpty() -> -1
+            selected !in profiles.indices -> 0
             else -> selected
         }
     }
 
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(
-                Modifier.fillMaxSize().padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
+            Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("HappNG", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                Text("مدیریت پروفایل‌های اتصال", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("مدیریت پروفایل‌ها و اشتراک‌ها", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                 Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            if (selected >= 0) "پروفایل انتخاب‌شده: ${profileName(profiles[selected])}" else "هنوز سروری اضافه نشده",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(if (connected) "هسته Xray در حال اجراست" else "آمادهٔ اتصال", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Button(
-                            onClick = {
-                                if (connected) {
-                                    context.startService(Intent(context, HappVpnService::class.java).setAction(HappVpnService.ACTION_STOP))
-                                    connected = false
-                                    message = "درخواست قطع اتصال ارسال شد."
-                                } else if (selected >= 0) {
-                                    try {
-                                        val config = XrayConfigBuilder.fromShareLink(profiles[selected])
-                                        val prepare = VpnService.prepare(context)
-                                        if (prepare == null) startVpn(config)
-                                        else {
-                                            pendingConfig = config
-                                            vpnPermission.launch(prepare)
-                                        }
-                                    } catch (e: Exception) {
-                                        message = e.message ?: "ساخت کانفیگ ناموفق بود."
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (selected >= 0) "سرور انتخاب‌شده: ${profileName(profiles[selected])}" else "هنوز سروری اضافه نشده", style = MaterialTheme.typography.titleMedium)
+                        Text(if (connected) "VPN متصل است" else "VPN قطع است", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Button(onClick = {
+                            if (connected) {
+                                val stop = Intent(context, HappVpnService::class.java).setAction(HappVpnService.ACTION_STOP)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(stop) else context.startService(stop)
+                                message = "درخواست قطع اتصال ارسال شد."
+                            } else if (selected >= 0) {
+                                try {
+                                    val config = XrayConfigBuilder.fromShareLink(profiles[selected])
+                                    val prepare = VpnService.prepare(context)
+                                    if (prepare == null) startVpn(config) else {
+                                        pendingConfig = config
+                                        vpnPermission.launch(prepare)
                                     }
-                                } else {
-                                    message = "ابتدا یک پروفایل VLESS اضافه و انتخاب کن."
+                                } catch (e: Exception) {
+                                    message = e.message ?: "ساخت کانفیگ ناموفق بود."
                                 }
-                            },
-                            enabled = connected || selected >= 0,
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text(if (connected) "قطع اتصال" else "اتصال") }
+                            } else message = "ابتدا یک سرور اضافه و انتخاب کن."
+                        }, enabled = connected || selected >= 0, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (connected) "قطع اتصال" else "اتصال")
+                        }
                         Text(message, style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
                 OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("لینک سرور یا Subscription") },
-                    placeholder = { Text("vless://…") },
-                    minLines = 2
+                    value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(),
+                    label = { Text("لینک مستقیم یا Subscription URL") },
+                    placeholder = { Text("vless://… یا https://…") }, minLines = 2
                 )
                 Button(
+                    enabled = input.isNotBlank() && !importing,
                     onClick = {
                         val value = input.trim()
-                        if (value.startsWith("vless://", ignoreCase = true)) {
-                            updateProfiles(profiles + value)
-                            selected = profiles.lastIndex
-                            input = ""
-                            message = "پروفایل VLESS ذخیره شد."
-                        } else {
-                            message = "در این مرحله فقط لینک مستقیم VLESS برای اتصال قابل تبدیل است."
+                        importing = true
+                        scope.launch {
+                            message = "در حال دریافت و پردازش لینک…"
+                            val result = withContext(Dispatchers.IO) { runCatching { importProfiles(value) } }
+                            importing = false
+                            result.onSuccess { imported ->
+                                if (imported.isEmpty()) message = "لینک دریافت شد، اما کانفیگ پشتیبانی‌شده‌ای داخل آن پیدا نشد."
+                                else {
+                                    val before = profiles.size
+                                    updateProfiles(profiles + imported)
+                                    selected = profiles.lastIndex
+                                    input = ""
+                                    message = "${imported.size} کانفیگ VLESS اضافه شد (تکراری‌ها حذف شدند)."
+                                }
+                            }.onFailure { e ->
+                                message = "دریافت Subscription ناموفق بود: ${e.message ?: "خطای نامشخص"}"
+                            }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("افزودن پروفایل") }
+                    }, modifier = Modifier.fillMaxWidth()
+                ) { Text(if (importing) "در حال دریافت…" else "دریافت و افزودن کانفیگ‌ها") }
 
-                Text("پروفایل‌ها (${profiles.size})", style = MaterialTheme.typography.titleMedium)
+                Text("سرورها (${profiles.size})", style = MaterialTheme.typography.titleMedium)
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     itemsIndexed(profiles) { index, profile ->
-                        Card(
-                            onClick = {
-                                selected = index
-                                message = "پروفایل انتخاب شد."
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (selected == index) MaterialTheme.colorScheme.secondaryContainer
-                                else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
+                        Card(onClick = { selected = index; message = "سرور انتخاب شد." }, modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = if (selected == index) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
                             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(profileName(profile), fontWeight = FontWeight.SemiBold)
                                     Text("VLESS", style = MaterialTheme.typography.bodySmall)
                                 }
-                                TextButton(onClick = {
-                                    updateProfiles(profiles.toMutableList().also { it.removeAt(index) })
-                                    message = "پروفایل حذف شد."
-                                }) { Text("حذف") }
+                                TextButton(onClick = { updateProfiles(profiles.toMutableList().also { it.removeAt(index) }); message = "سرور حذف شد." }) { Text("حذف") }
                             }
                         }
                     }
                 }
-                Text(
-                    "پروفایل‌ها روی دستگاه ذخیره می‌شوند. فعلاً مبدل اتصال برای VLESS پیاده‌سازی شده؛ سایر پروتکل‌ها و اشتراک‌ها هنوز در دست توسعه‌اند.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("ورود Subscription در این نسخه کانفیگ‌های VLESS موجود در متن اشتراک را استخراج می‌کند. پروتکل‌های دیگر هنوز اضافه نشده‌اند.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
+}
+
+/** Accepts a direct share URI, a plain-text subscription, or a base64-encoded subscription. */
+private fun importProfiles(value: String): List<String> {
+    if (value.startsWith("vless://", ignoreCase = true)) return listOf(value)
+    require(value.startsWith("https://", true) || value.startsWith("http://", true)) {
+        "لینک باید با http، https یا vless شروع شود."
+    }
+    val connection = (URL(value).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 15_000
+        readTimeout = 20_000
+        instanceFollowRedirects = true
+        setRequestProperty("User-Agent", "HappNG/0.2")
+        setRequestProperty("Accept", "text/plain, */*")
+    }
+    val body = try {
+        val code = connection.responseCode
+        require(code in 200..299) { "سرور Subscription کد HTTP $code برگرداند." }
+        connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+    } finally { connection.disconnect() }
+
+    val candidates = sequenceOf(body, decodeSubscription(body)).filterNotNull()
+    val lines = candidates.flatMap { it.lineSequence() }
+        .map { it.trim().removePrefix("\uFEFF") }
+        .filter { it.startsWith("vless://", true) }
+        .distinct()
+        .toList()
+    return lines
+}
+
+private fun decodeSubscription(body: String): String? {
+    val compact = body.trim().replace("\\s".toRegex(), "")
+    if (compact.isBlank() || compact.startsWith("vless://", true)) return null
+    val normalized = compact.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+    return runCatching { String(Base64.getDecoder().decode(normalized), Charsets.UTF_8) }.getOrNull()
+        ?: runCatching { String(android.util.Base64.decode(normalized, android.util.Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
 }
 
 private fun profileName(link: String): String =
