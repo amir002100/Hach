@@ -72,4 +72,16 @@ object XrayRuntime {
     }
 
     fun isRunning(): Boolean = controller?.isRunning == true
+
+    /**
+     * Tests the active proxy outbound from inside Xray, not from Android's
+     * ordinary network stack. A successful response proves the selected
+     * outbound can resolve/connect and return data.
+     */
+    @Synchronized
+    fun measureDelay(url: String): Long {
+        val current = controller ?: error("Xray controller is not initialized")
+        check(current.isRunning) { "Xray core is not running" }
+        return current.measureDelay(url)
+    }
 }
