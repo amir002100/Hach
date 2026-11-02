@@ -85,9 +85,37 @@ class HappVpnService : VpnService() {
                 closeTunnel()
                 return
             }
-            updateState(true)
-            updateNotification("هسته Xray اجرا شد؛ در حال بررسی ترافیک")
-            Log.i(TAG, "Xray core started")
+            updateState(true, "در حال آزمایش مسیر واقعی سرور…")
+            updateNotification("هسته روشن شد؛ در حال آزمایش اینترنت")
+            Log.i(TAG, "Xray core started; running outbound health checks")
+
+            // Test through Xray itself. Core-running alone does not mean the
+            // VLESS server is reachable or that the outbound can return data.
+            val checks = listOf(
+                "https://www.cloudflare.com/cdn-cgi/trace",
+                "https://www.google.com/generate_204"
+            )
+            var lastFailure: Throwable? = null
+            var latency: Long? = null
+            for (url in checks) {
+                try {
+                    latency = XrayRuntime.measureDelay(url)
+                    break
+                } catch (failure: Exception) {
+                    lastFailure = failure
+                    Log.w(TAG, "Outbound health check failed for $url", failure)
+                }
+            }
+            if (latency != null) {
+                updateState(true, "اینترنت از تونل فعال است؛ تأخیر ${latency}ms")
+                updateNotification("اتصال اینترنت برقرار است · ${latency}ms")
+                Log.i(TAG, "Outbound health check passed: ${latency}ms")
+            } else {
+                val reason = lastFailure?.message ?: "پاسخی از سرور دریافت نشد"
+                updateState(true, "هسته روشن است، اما اینترنت از تونل عبور نمی‌کند: $reason")
+                updateNotification("هسته روشن؛ ارتباط سرور ناموفق")
+                Log.e(TAG, "Core is running but outbound health checks failed: $reason", lastFailure)
+            }
         } catch (error: Exception) {
             Log.e(TAG, "VPN startup failed", error)
             closeTunnel()
