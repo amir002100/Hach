@@ -59,11 +59,14 @@ private fun HappNgApp(initialProfiles: List<String>, persist: (List<String>) -> 
     var message by remember { mutableStateOf("لینک سرور یا Subscription را وارد کن.") }
     var pendingConfig by remember { mutableStateOf<String?>(null) }
     var connected by remember { mutableStateOf(false) }
+    var connectionDiagnostic by remember { mutableStateOf("") }
     var importing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            connected = context.getSharedPreferences("happng", 0).getBoolean("connected", false)
+            val prefs = context.getSharedPreferences("happng", 0)
+            connected = prefs.getBoolean("connected", false)
+            connectionDiagnostic = prefs.getString("connection_error", "").orEmpty()
             kotlinx.coroutines.delay(700)
         }
     }
@@ -109,7 +112,15 @@ private fun HappNgApp(initialProfiles: List<String>, persist: (List<String>) -> 
                 Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (selected >= 0) "سرور انتخاب‌شده: ${profileName(profiles[selected])}" else "هنوز سروری اضافه نشده", style = MaterialTheme.typography.titleMedium)
-                        Text(if (connected) "VPN متصل است" else "VPN قطع است", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (connected) "هسته VPN روشن است" else "VPN قطع است", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (connectionDiagnostic.isNotBlank()) {
+                            Text(
+                                connectionDiagnostic,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (connectionDiagnostic.contains("فعال است")) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error
+                            )
+                        }
                         Button(onClick = {
                             if (connected) {
                                 val stop = Intent(context, HappVpnService::class.java).setAction(HappVpnService.ACTION_STOP)
