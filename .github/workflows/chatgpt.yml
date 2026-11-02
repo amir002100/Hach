@@ -1,7 +1,10 @@
 name: ChatGPT Integration
+
 on: [push]
+
 jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- uses: kxxt/chatgpt-action@v0.3
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kxxt/chatgpt-action@v0.3
+
