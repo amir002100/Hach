@@ -11,15 +11,23 @@ import android.os.ParcelFileDescriptor
 
 class HappVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
+    private val prefs by lazy { getSharedPreferences("happng", MODE_PRIVATE) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         when (intent?.action) {
-            ACTION_STOP -> stopTunnel()
+            ACTION_STOP -> {
+                closeTunnel()
+                updateState(false)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 if (config.isNullOrBlank()) {
+                    updateState(false, "کانفیگ خالی است.")
+                    stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -30,7 +38,10 @@ class HappVpnService : VpnService() {
     }
 
     private fun startTunnel(config: String) {
-        stopTunnel()
+        // Close an old tunnel without stopping this service; the previous implementation
+        // called stopSelf() here and could kill the service before the new tunnel started.
+        closeTunnel()
+        updateState(false, "در حال اتصال…")
         try {
             val established = Builder()
                 .setSession("HappNG")
@@ -42,20 +53,27 @@ class HappVpnService : VpnService() {
                 .establish() ?: error("Android did not establish the VPN interface")
             vpnInterface = established
             XrayRuntime.start(this, config, established.fd)
+            check(XrayRuntime.isRunning()) { "Xray core did not start" }
+            updateState(true)
             updateNotification("VPN متصل است")
         } catch (error: Exception) {
-            stopTunnel()
-            updateNotification("خطا در اتصال: ${error.message ?: "unknown"}")
+            closeTunnel()
+            val reason = error.message ?: error.javaClass.simpleName
+            updateState(false, reason)
+            updateNotification("خطا در اتصال: $reason")
             stopSelf()
         }
     }
 
-    private fun stopTunnel() {
+    private fun closeTunnel() {
         XrayRuntime.stop()
         runCatching { vpnInterface?.close() }
         vpnInterface = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+    }
+
+    private fun updateState(connected: Boolean, error: String? = null) {
+        prefs.edit().putBoolean("connected", connected)
+            .putString("connection_error", error.orEmpty()).apply()
     }
 
     private fun createNotificationChannel() {
@@ -67,25 +85,30 @@ class HappVpnService : VpnService() {
 
     private fun buildNotification(text: String = "در حال آماده‌سازی VPN"): Notification {
         val stopIntent = Intent(this, HappVpnService::class.java).setAction(ACTION_STOP)
-        val pending = PendingIntent.getService(
-            this, 1, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION") Notification.Builder(this)
-        }
-        return builder.setContentTitle("HappNG")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setOngoing(true)
-            .addAction(android.R.drawable.ic_media_pause, "قطع اتصال", pending)
-            .build()
+        val pending = PendingIntent.getService(this, 1, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID)
+        else @Suppress("DEPRECATION") Notification.Builder(this)
+        return builder.setContentTitle("HappNG").setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_sys_warning).setOngoing(true)
+            .addAction(android.R.drawable.ic_media_pause, "قطع اتصال", pending).build()
     }
 
     private fun updateNotification(text: String) {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    override fun onRevoke() {
+        closeTunnel()
+        updateState(false, "مجوز VPN لغو شد.")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        super.onRevoke()
+    }
+
+    override fun onDestroy() {
+        closeTunnel()
+        updateState(false)
+        super.onDestroy()
     }
 
     companion object {
