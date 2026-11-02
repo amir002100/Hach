@@ -1,15 +1,19 @@
-name: ChatGPT Integration
-on: [push]
+on: [pull_request]
+
+name: ChatGPT CodeReview
+
 jobs:
-  build:
+  chatgpt_comment:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
+    name: Let chatgpt comment on your PR.
     steps:
-      - uses: actions/checkout@v3
-      - uses: kxxt/chatgpt-action@v0.3
+      - name: ChatGPT comment
+        uses: kxxt/chatgpt-action@v0.3
+        id: chatgpt
+        with:
+          number: ${{ github.event.pull_request.number }}
+          sessionToken: ${{ secrets.CHATGPT_SESSION_TOKEN }}
+          split: 'yolo'  # Use true to enable the unstable split feature.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
