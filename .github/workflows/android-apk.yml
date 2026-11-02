@@ -1,27 +1,99 @@
 name: Android APK
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
-  build:
+  build-xray:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout pinned Android Xray binding
+        uses: actions/checkout@v4
+        with:
+          repository: 2dust/AndroidLibXrayLite
+          ref: 2ffe5f794a32ba15b122e177b5acffc6f11c4959
+          path: xray-lib
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: xray-lib/go.mod
+          cache-dependency-path: xray-lib/go.sum
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+
+      - name: Build Xray Android library
+        working-directory: xray-lib
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          mkdir -p assets data
+          bash gen_assets.sh download
+          cp data/*.dat assets/
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          gomobile init
+          go mod tidy
+          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+          mkdir -p ../xray-bundle/libs ../xray-bundle/assets
+          cp libv2ray.aar ../xray-bundle/libs/
+          cp data/*.dat ../xray-bundle/assets/
+
+      - name: Upload Xray runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-android-runtime
+          path: xray-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  build-android:
+    needs: build-xray
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Xray runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: xray-android-runtime
+          path: app/
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build debug APK
+
+      - name: Build debug APK with Xray runtime
         run: gradle --no-daemon :app:assembleDebug
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: HappNG-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
