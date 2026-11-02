@@ -89,33 +89,14 @@ class HappVpnService : VpnService() {
             updateNotification("هسته روشن شد؛ در حال آزمایش اینترنت")
             Log.i(TAG, "Xray core started; running outbound health checks")
 
-            // Test through Xray itself. Core-running alone does not mean the
-            // VLESS server is reachable or that the outbound can return data.
-            val checks = listOf(
-                "https://www.cloudflare.com/cdn-cgi/trace",
-                "https://www.google.com/generate_204"
-            )
-            var lastFailure: Throwable? = null
-            var latency: Long? = null
-            for (url in checks) {
-                try {
-                    latency = XrayRuntime.measureDelay(url)
-                    break
-                } catch (failure: Exception) {
-                    lastFailure = failure
-                    Log.w(TAG, "Outbound health check failed for $url", failure)
-                }
-            }
-            if (latency != null) {
-                updateState(true, "اینترنت از تونل فعال است؛ تأخیر ${latency}ms")
-                updateNotification("اتصال اینترنت برقرار است · ${latency}ms")
-                Log.i(TAG, "Outbound health check passed: ${latency}ms")
-            } else {
-                val reason = lastFailure?.message ?: "پاسخی از سرور دریافت نشد"
-                updateState(true, "هسته روشن است، اما اینترنت از تونل عبور نمی‌کند: $reason")
-                updateNotification("هسته روشن؛ ارتباط سرور ناموفق")
-                Log.e(TAG, "Core is running but outbound health checks failed: $reason", lastFailure)
-            }
+            // Do not use CoreController.measureDelay() as a VPN health check.
+            // The AndroidLibXrayLite implementation dials through core.Dial and
+            // may return low-level pipe errors unrelated to Android TUN routing.
+            // Core running is reported separately; actual traffic must be checked
+            // using outbound counters while the user generates traffic.
+            updateState(true, "هسته Xray روشن است؛ عبور واقعی اینترنت هنوز تأیید نشده است.")
+            updateNotification("هسته VPN روشن است؛ اینترنت هنوز بررسی نشده")
+            Log.i(TAG, "Xray core started; outbound traffic is not yet verified")
         } catch (error: Exception) {
             Log.e(TAG, "VPN startup failed", error)
             closeTunnel()
