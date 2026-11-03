@@ -69,7 +69,6 @@ class HappVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
                 .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
                 .establish() ?: error("Android نتوانست رابط VPN را ایجاد کند")
 
             if (closing.get()) {
@@ -85,18 +84,18 @@ class HappVpnService : VpnService() {
                 closeTunnel()
                 return
             }
-            updateState(true, "در حال آزمایش مسیر واقعی سرور…")
-            updateNotification("هسته روشن شد؛ در حال آزمایش اینترنت")
-            Log.i(TAG, "Xray core started; running outbound health checks")
+            updateState(true, "هسته روشن است؛ IPv4 از تونل فعال شده، ترافیک هنوز تأیید نشده.")
+            updateNotification("هسته روشن است؛ IPv4 تونل فعال")
+            Log.i(TAG, "Xray core started; IPv4 default route installed; outbound traffic not verified")
 
             // Do not use CoreController.measureDelay() as a VPN health check.
             // The AndroidLibXrayLite implementation dials through core.Dial and
             // may return low-level pipe errors unrelated to Android TUN routing.
             // Core running is reported separately; actual traffic must be checked
             // using outbound counters while the user generates traffic.
-            updateState(true, "هسته Xray روشن است؛ عبور واقعی اینترنت هنوز تأیید نشده است.")
-            updateNotification("هسته VPN روشن است؛ اینترنت هنوز بررسی نشده")
-            Log.i(TAG, "Xray core started; outbound traffic is not yet verified")
+            updateState(true, "هسته Xray روشن است؛ IPv4 تونل فعال است، عبور اینترنت هنوز تأیید نشده.")
+            updateNotification("هسته روشن است؛ اینترنت تأیید نشده")
+            Log.i(TAG, "Xray core started; IPv4-only TUN; outbound traffic is not yet verified")
         } catch (error: Exception) {
             Log.e(TAG, "VPN startup failed", error)
             closeTunnel()
